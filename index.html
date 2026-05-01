@@ -52,63 +52,121 @@
     justify-content: center;
     background: rgba(0, 0, 0, 0.97);
     color: #ddd;
-    font: 15px/1.65 ui-serif, Georgia, "Times New Roman", serif;
+    font: 15px/1.6 ui-serif, Georgia, "Times New Roman", serif;
     z-index: 50;
     opacity: 0;
     transition: opacity 700ms ease;
     -webkit-user-select: text;
     user-select: text;
+    overflow-y: auto;
   }
   #reveal.show {
     display: flex;
     opacity: 1;
   }
   #reveal .inner {
-    max-width: 560px;
-    padding: 44px 40px;
+    max-width: 600px;
+    padding: 48px 44px;
     text-align: left;
   }
+  #reveal .kicker {
+    font-size: 10.5px;
+    letter-spacing: 0.22em;
+    text-transform: uppercase;
+    color: #555;
+    margin-bottom: 14px;
+  }
   #reveal .big {
-    font-size: 22px;
+    font-size: 26px;
     color: #fff;
     margin-bottom: 28px;
-    letter-spacing: 0.005em;
+    letter-spacing: 0.002em;
+    line-height: 1.25;
   }
-  #reveal .stats {
-    margin: 0 0 28px 0;
-    padding: 14px 0;
-    border-top: 1px solid #1f1f1f;
-    border-bottom: 1px solid #1f1f1f;
+  #reveal .section { margin-bottom: 28px; }
+  #reveal .section-title {
+    font-size: 10.5px;
+    letter-spacing: 0.22em;
+    text-transform: uppercase;
+    color: #666;
+    margin-bottom: 14px;
   }
-  #reveal .stats div {
-    display: flex;
-    justify-content: space-between;
-    color: #999;
-    font-size: 14px;
-    padding: 3px 0;
-  }
-  #reveal .stats .num {
-    color: #fff;
-    font-variant-numeric: tabular-nums;
-  }
-  #reveal .line {
-    margin: 0 0 14px 0;
-    color: #bbb;
-  }
+  #reveal .line { margin: 0 0 12px 0; color: #bbb; }
   #reveal .mono {
     font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
     color: #fff;
     font-size: 13px;
   }
-  #reveal .small {
-    display: block;
-    font-size: 13px;
+  #reveal em { color: #fff; font-style: italic; }
+
+  #reveal .profile-grid {
+    border-top: 1px solid #1f1f1f;
+    border-bottom: 1px solid #1f1f1f;
+    padding: 8px 0;
+    margin-bottom: 16px;
+  }
+  #reveal .profile-row {
+    display: grid;
+    grid-template-columns: 110px 1fr auto;
+    gap: 16px;
+    padding: 7px 0;
+    align-items: baseline;
+    font-size: 14px;
+  }
+  #reveal .profile-row + .profile-row { border-top: 1px solid #161616; }
+  #reveal .profile-key {
     color: #777;
-    margin-top: 22px;
+    font-size: 10.5px;
+    letter-spacing: 0.18em;
+    text-transform: uppercase;
+  }
+  #reveal .profile-label {
+    color: #fff;
+    font-style: italic;
+  }
+  #reveal .profile-num {
+    color: #888;
+    font-size: 12.5px;
+    font-variant-numeric: tabular-nums;
+    text-align: right;
+  }
+  #reveal .synth {
+    margin-top: 10px;
+    padding-top: 0;
+    color: #ddd;
+    font-style: italic;
+    line-height: 1.55;
+  }
+  #reveal .axes {
+    display: grid;
+    grid-template-columns: 110px 1fr;
+    gap: 16px;
+    padding: 12px 0;
+    border-top: 1px solid #1f1f1f;
+    border-bottom: 1px solid #1f1f1f;
+    margin: 12px 0 14px 0;
+  }
+  #reveal .axes .axis-key {
+    color: #777;
+    font-size: 10.5px;
+    letter-spacing: 0.18em;
+    text-transform: uppercase;
+  }
+  #reveal .axes .axis-val { color: #fff; font-size: 14px; }
+  #reveal .pop {
+    font-size: 12.5px;
+    color: #777;
+    font-style: italic;
+    margin-top: 6px;
+  }
+  #reveal .footnote {
+    font-size: 12px;
+    color: #555;
+    margin-top: 18px;
     line-height: 1.55;
   }
   #reveal .actions {
-    margin-top: 28px;
+    margin-top: 22px;
     display: flex;
     gap: 12px;
   }
@@ -131,18 +189,25 @@
 
 <div id="reveal" aria-hidden="true">
   <div class="inner">
-    <div class="big">It was learning you.</div>
+    <div class="kicker">a study in attention as data</div>
+    <div class="big">Your behavior, profiled.</div>
 
-    <div class="stats">
-      <div><span>time on the page</span><span class="num" id="rv-total">—</span></div>
-      <div><span>active attention</span><span class="num" id="rv-active">—</span></div>
-      <div><span>catches</span><span class="num" id="rv-catches">—</span></div>
+    <div class="section">
+      <div class="section-title">what your behavior said</div>
+      <div class="profile-grid" id="rv-profile-grid"><!-- rows injected --></div>
+      <div class="synth" id="rv-synth">—</div>
     </div>
 
-    <div class="line">The dot had sixteen personalities. The one that held you longest was <span class="mono" id="rv-yours">—</span> — <span id="rv-yours-desc">—</span>.</div>
-    <div class="line">The personality leading across all visitors right now: <span class="mono" id="rv-best">—</span> — <span id="rv-best-desc">—</span>.</div>
+    <div class="section">
+      <div class="section-title">what the dot did</div>
+      <div class="line">The dot is a multi-armed bandit running over <span class="mono">16</span> personalities. In your <span class="mono" id="rv-time">—</span> here it ran <span class="mono" id="rv-cycles">—</span> 8-second cycles, choosing one personality at a time. It treated your active mouse movement as the reward signal and updated its beliefs after each cycle.</div>
 
-    <span class="small">A study in attention as data. The dot is a multi-armed bandit. You were the reward signal.</span>
+      <div class="line">The personality that held <em>you</em> the longest in this session:</div>
+      <div class="axes" id="rv-yours-axes"><!-- four axes injected --></div>
+      <div class="pop">Across all visitors, the personality leading right now: <span class="mono" id="rv-best">[—]</span> — <span id="rv-best-desc">—</span>.</div>
+    </div>
+
+    <div class="footnote">Every label above came from your numbers, not a vibe. The numbers are next to the labels. None of this leaves your browser.</div>
 
     <div class="actions">
       <button class="btn" id="rv-stay">stay</button>
@@ -290,6 +355,9 @@
   }
 
   window.addEventListener('mousemove', (e) => {
+    const dx = e.clientX - mouseX;
+    const dy = e.clientY - mouseY;
+    mousePathPx += Math.hypot(dx, dy);
     mouseX = e.clientX;
     mouseY = e.clientY;
     const t = performance.now();
@@ -299,8 +367,11 @@
 
   window.addEventListener('touchmove', (e) => {
     if (!e.touches || e.touches.length === 0) return;
-    mouseX = e.touches[0].clientX;
-    mouseY = e.touches[0].clientY;
+    const tx = e.touches[0].clientX;
+    const ty = e.touches[0].clientY;
+    mousePathPx += Math.hypot(tx - mouseX, ty - mouseY);
+    mouseX = tx;
+    mouseY = ty;
     const t = performance.now();
     pushMouse(mouseX, mouseY, t);
     lastActivity = t;
@@ -311,6 +382,11 @@
     if (e.button !== 0) return;        // left button only
     if (revealActive) return;          // don't register grabs through the overlay
     mouseDown   = true;
+    mouseDownCount++;
+    if (dotState === 'NORMAL') {
+      const dist = Math.hypot(dot.x - e.clientX, dot.y - e.clientY);
+      if (dist < 60) attemptsNearDot++;
+    }
     lastActivity = performance.now();
   }, { passive: true });
   window.addEventListener('mouseup',     () => { mouseDown = false; }, { passive: true });
@@ -322,6 +398,11 @@
     const t = performance.now();
     pushMouse(mouseX, mouseY, t);
     mouseDown   = true;
+    mouseDownCount++;
+    if (dotState === 'NORMAL') {
+      const dist = Math.hypot(dot.x - mouseX, dot.y - mouseY);
+      if (dist < 60) attemptsNearDot++;
+    }
     lastActivity = t;
   }, { passive: true });
   window.addEventListener('touchend',    () => { mouseDown = false; }, { passive: true });
@@ -410,6 +491,7 @@
     holdAnchorY  = dot.y;
     lurchFired   = [false, false, false];
     lurchUntil   = 0;
+    lurchInFlight = false;
     jitterPhaseA = Math.random() * Math.PI * 2;
     jitterPhaseB = Math.random() * Math.PI * 2;
   }
@@ -447,6 +529,17 @@
   let sessionStart     = performance.now();
   let sessionActiveMs  = 0;
   let epochsCompleted  = 0;
+
+  // Behavioral tracking — feeds the per-visitor profile in the reveal.
+  // None of this leaves the browser.
+  let mousePathPx       = 0;     // total cursor distance moved
+  let mouseDownCount    = 0;     // total left-button presses
+  let attemptsNearDot   = 0;     // mouse-down within 60px of dot while NORMAL
+  let holdDurations     = [];    // ms — duration of each completed hold
+  let lurchEncountered  = 0;     // # of lurches fired across all holds
+  let lurchSurvived     = 0;     // # of lurches the user kept their grip through
+  let lurchInFlight     = false; // a lurch is currently in progress
+  let lurchEndT         = 0;     // when the in-flight lurch ends
 
   function endEpoch() {
     const reward = Math.max(0, Math.min(1, epochActiveMs / EPOCH_MS));
@@ -552,6 +645,8 @@
       for (let i = 0; i < LURCH_THRESHOLDS.length; i++) {
         if (!lurchFired[i] && u >= LURCH_THRESHOLDS[i]) {
           lurchFired[i] = true;
+          lurchEncountered++;
+          lurchInFlight = true;
           // Direction: away from cursor, with some jitter.
           const ang = Math.atan2(dot.y - mouseY, dot.x - mouseX) +
                       (Math.random() - 0.5) * 0.9;
@@ -560,7 +655,14 @@
           lurchVx    = Math.cos(ang) * lurchSpeed;
           lurchVy    = Math.sin(ang) * lurchSpeed;
           lurchUntil = now + LURCH_MS;
+          lurchEndT  = lurchUntil;
         }
+      }
+
+      // If a lurch just ended and we're still gripping, count it as survived.
+      if (lurchInFlight && now >= lurchEndT) {
+        lurchSurvived++;
+        lurchInFlight = false;
       }
 
       // Smooth jitter — combined sines, low-frequency for organic feel.
@@ -593,6 +695,16 @@
       // Hold ends when: button released, cursor strays beyond HOLD_R, or the
       // max hold duration is up.
       if (!mouseDown || dr > HOLD_R || heldFor >= MAX_HOLD_MS) {
+        // Lurch survival accounting at the moment the grip ends.
+        if (lurchInFlight) {
+          // If they ran out the clock, count it; otherwise the lurch shook
+          // them off mid-flight.
+          if (heldFor >= MAX_HOLD_MS) lurchSurvived++;
+          lurchInFlight = false;
+        }
+        // Record this hold's duration for the profile.
+        holdDurations.push(heldFor);
+
         dotState   = 'SLIPPING';
         stateUntil = now + SLIP_MS;
         const ang     = Math.atan2(dot.y - mouseY, dot.x - mouseX);
@@ -702,6 +814,13 @@
       lastHiddenAt    = 0;
       lastRevealReason = '';
       mouseDown       = false;
+      mousePathPx     = 0;
+      mouseDownCount  = 0;
+      attemptsNearDot = 0;
+      holdDurations   = [];
+      lurchEncountered = 0;
+      lurchSurvived   = 0;
+      lurchInFlight   = false;
       hideReveal();
     }
   });
@@ -808,41 +927,177 @@ ${top}`;
     return bestI;
   }
 
+  // ---------- Profile derivation ----------
+  // Translate behavioral signals into labels, with thresholds explicit so the
+  // "why" of each label is the number sitting next to it.
+  function buildProfile() {
+    const totalMs   = performance.now() - sessionStart;
+    const totalSec  = totalMs / 1000;
+    // include in-progress epoch's accrual so a recent attentive minute counts
+    const activeMs  = sessionActiveMs + epochActiveMs;
+    const activeSec = activeMs / 1000;
+    const activeFrac = totalSec > 0 ? activeSec / totalSec : 0;
+
+    // Engagement — share of session time the hand was actually moving.
+    let engagement;
+    if      (activeFrac >= 0.75) engagement = 'rapt';
+    else if (activeFrac >= 0.45) engagement = 'engaged';
+    else if (activeFrac >= 0.20) engagement = 'drifting';
+    else                          engagement = 'absent';
+
+    // Tempo — average speed of the cursor while it was moving.
+    const speed = activeSec > 0.5 ? mousePathPx / activeSec : 0;
+    let tempo;
+    if      (speed >= 700) tempo = 'frenetic';
+    else if (speed >= 350) tempo = 'alert';
+    else if (speed >= 120) tempo = 'deliberate';
+    else                    tempo = 'still';
+
+    // Grip — composite of catch-rate and avg hold duration.
+    const totalHoldMs = holdDurations.reduce((a, b) => a + b, 0);
+    const avgHoldMs   = holdDurations.length > 0
+      ? totalHoldMs / holdDurations.length
+      : 0;
+    const completed = catchCount;
+    const attempted = Math.max(attemptsNearDot, completed);
+    let grip;
+    if (attempted === 0)            grip = 'never tried';
+    else if (avgHoldMs >= 1100)     grip = 'white-knuckle';
+    else if (avgHoldMs >= 500)      grip = 'measured';
+    else if (completed > 0)         grip = 'tentative';
+    else                            grip = 'fumbling';
+
+    // Reactivity — how often you held on through a lurch.
+    let reactivity = '—';
+    if (lurchEncountered > 0) {
+      const r = lurchSurvived / lurchEncountered;
+      if      (r >= 0.7)  reactivity = 'persistent';
+      else if (r >= 0.35) reactivity = 'reactive';
+      else                reactivity = 'easily shaken';
+    }
+
+    return {
+      totalMs, totalSec, activeMs, activeSec, activeFrac,
+      mousePathPx, speed,
+      completed, attempted, avgHoldMs, totalHoldMs,
+      lurchEncountered, lurchSurvived,
+      engagement, tempo, grip, reactivity,
+    };
+  }
+
+  // Synthesize the profile into a one-paragraph read.
+  function synthesize(armIdx, p) {
+    const sentences = [];
+    if (armIdx >= 0) {
+      const a = ARMS[armIdx];
+      const traits = [
+        a.s ? 'movement'        : 'slowness',
+        a.d ? 'space'           : 'closeness',
+        a.e ? 'volatility'      : 'calm',
+        a.l ? 'a delayed feel'  : 'an immediate feel',
+      ];
+      sentences.push('You stayed for ' + traits.join(', ') + '.');
+    } else {
+      sentences.push(
+        'Not enough cycles for the bandit to weigh in on your favorite ' +
+        'personality — but the rest of the read still holds.'
+      );
+    }
+
+    const fragments = [];
+    if      (p.engagement === 'rapt')     fragments.push('Your attention barely wavered');
+    else if (p.engagement === 'engaged')  fragments.push('Your attention came and went');
+    else if (p.engagement === 'drifting') fragments.push('Most of you was somewhere else');
+    else                                   fragments.push('You were barely here');
+
+    if      (p.grip === 'white-knuckle')  fragments.push('your grip stayed locked');
+    else if (p.grip === 'measured')       fragments.push('your holds were careful');
+    else if (p.grip === 'tentative')      fragments.push('your grip was light');
+    else if (p.grip === 'fumbling')       fragments.push('you never quite got your hand on it');
+    else if (p.grip === 'never tried')    fragments.push('you never tried to grab it');
+
+    if (p.lurchEncountered > 0) {
+      if      (p.reactivity === 'persistent')    fragments.push("the lurches didn't shake you");
+      else if (p.reactivity === 'reactive')      fragments.push('you tracked the lurches some of the time');
+      else if (p.reactivity === 'easily shaken') fragments.push('the lurches knocked you off');
+    }
+
+    if (fragments.length > 0) sentences.push(fragments.join(' — ') + '.');
+    return sentences.join(' ');
+  }
+
   function showReveal(reason) {
     if (revealShown || revealActive) return;
     if (performance.now() - sessionStart < REVEAL_MIN_DWELL_MS) return;
     if (dotState === 'CAUGHT') return; // never interrupt an in-progress hold
-    revealShown  = true;
-    revealActive = true;
+    revealShown      = true;
+    revealActive     = true;
     lastRevealReason = reason || 'unknown';
 
     // Flush partial epoch credit first so stats reflect everything so far.
     flushOnBlur();
 
-    const totalMs  = performance.now() - sessionStart;
-    const activeMs = sessionActiveMs +
-      (epochActiveMs > 0 ? epochActiveMs : 0); // include current epoch progress
+    const profile = buildProfile();
+    const yoursI  = bestSessionArm();
+    const bestI   = bestPopulationArm();
 
-    document.getElementById('rv-total').textContent   = fmtTime(totalMs);
-    document.getElementById('rv-active').textContent  = fmtTime(activeMs);
-    document.getElementById('rv-catches').textContent = String(catchCount);
+    // ---------- Behavioral profile grid ----------
+    function row(key, label, num) {
+      return '<div class="profile-row">' +
+        '<div class="profile-key">'   + key   + '</div>' +
+        '<div class="profile-label">' + label + '</div>' +
+        '<div class="profile-num">'   + num   + '</div>' +
+      '</div>';
+    }
 
-    const yoursI = bestSessionArm();
-    const bestI  = bestPopulationArm();
+    const totalFmt   = fmtTime(profile.totalMs);
+    const activePct  = Math.round(profile.activeFrac * 100);
+    const speedNum   = Math.round(profile.speed);
 
+    const gripNum = profile.attempted > 0
+      ? (profile.completed + ' of ' + profile.attempted + ' grabs · avg hold ' +
+         (profile.avgHoldMs / 1000).toFixed(1) + 's')
+      : '0 grabs attempted';
+
+    const reactNum = profile.lurchEncountered > 0
+      ? (profile.lurchSurvived + ' of ' + profile.lurchEncountered + ' lurches survived')
+      : 'no lurches yet';
+
+    document.getElementById('rv-profile-grid').innerHTML =
+      row('Engagement', profile.engagement,  activePct + '% active of ' + totalFmt) +
+      row('Tempo',      profile.tempo,       speedNum + ' px/s avg') +
+      row('Grip',       profile.grip,        gripNum) +
+      row('Reactivity', profile.reactivity,  reactNum);
+
+    document.getElementById('rv-synth').textContent = synthesize(yoursI, profile);
+
+    // ---------- "What the dot did" ----------
+    document.getElementById('rv-time').textContent   = totalFmt;
+    document.getElementById('rv-cycles').textContent = String(epochsCompleted);
+
+    const axesEl = document.getElementById('rv-yours-axes');
     if (yoursI >= 0) {
-      document.getElementById('rv-yours').textContent      = '[' + armLabel(yoursI) + ']';
-      document.getElementById('rv-yours-desc').textContent = describeArm(yoursI);
+      const a = ARMS[yoursI];
+      const axisRow = (k, v) =>
+        '<div class="axis-key">' + k + '</div>' +
+        '<div class="axis-val">' + v + '</div>';
+      axesEl.innerHTML =
+        axisRow('label',       '<span class="mono">[' + armLabel(yoursI) + ']</span>') +
+        axisRow('pace',        a.s ? 'fast'    : 'slow') +
+        axisRow('distance',    a.d ? 'distant' : 'close') +
+        axisRow('volatility',  a.e ? 'nervous' : 'calm') +
+        axisRow('response',    a.l ? 'delayed' : 'immediate');
     } else {
-      document.getElementById('rv-yours').textContent      = '—';
-      document.getElementById('rv-yours-desc').textContent = 'no full epoch yet';
+      axesEl.innerHTML =
+        '<div class="axis-key">label</div>' +
+        '<div class="axis-val">— (not enough cycles yet to read your taste)</div>';
     }
 
     if (bestI >= 0) {
       document.getElementById('rv-best').textContent      = '[' + armLabel(bestI) + ']';
       document.getElementById('rv-best-desc').textContent = describeArm(bestI);
     } else {
-      document.getElementById('rv-best').textContent      = '—';
+      document.getElementById('rv-best').textContent      = '[—]';
       document.getElementById('rv-best-desc').textContent = 'still gathering';
     }
 
