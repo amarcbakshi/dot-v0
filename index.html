@@ -1,0 +1,798 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
+<meta name="robots" content="noindex">
+<title>·</title>
+<!--
+  v0 sketch — single white dot, mouse-only.
+  16-arm Thompson-sampling bandit over (speed, distance, escape, delay).
+  Reward per 8-second epoch = active-dwell-fraction.
+  Population memory persisted in localStorage.
+
+  Press D to toggle the hidden debug overlay.
+  Press R to reset memory (debug only).
+-->
+<style>
+  html, body {
+    margin: 0; padding: 0;
+    height: 100%; width: 100%;
+    overflow: hidden;
+    background: #000;
+    cursor: none;
+    user-select: none;
+    -webkit-user-select: none;
+    touch-action: none;
+  }
+  body.reveal-on { cursor: auto; }
+  canvas { display: block; position: fixed; top: 0; left: 0; }
+  #debug {
+    position: fixed; top: 12px; left: 12px;
+    color: #aaa;
+    font: 11px/1.45 ui-monospace, SFMono-Regular, Menlo, monospace;
+    background: rgba(0,0,0,0.78);
+    padding: 10px 12px;
+    border: 1px solid #2a2a2a;
+    border-radius: 4px;
+    display: none;
+    pointer-events: none;
+    max-width: 400px;
+    white-space: pre;
+    z-index: 10;
+    margin: 0;
+  }
+  #debug.show { display: block; }
+
+  /* ---------- Exit-intent reveal ---------- */
+  #reveal {
+    position: fixed; inset: 0;
+    display: none;
+    align-items: center;
+    justify-content: center;
+    background: rgba(0, 0, 0, 0.97);
+    color: #ddd;
+    font: 15px/1.65 ui-serif, Georgia, "Times New Roman", serif;
+    z-index: 50;
+    opacity: 0;
+    transition: opacity 700ms ease;
+    -webkit-user-select: text;
+    user-select: text;
+  }
+  #reveal.show {
+    display: flex;
+    opacity: 1;
+  }
+  #reveal .inner {
+    max-width: 560px;
+    padding: 44px 40px;
+    text-align: left;
+  }
+  #reveal .big {
+    font-size: 22px;
+    color: #fff;
+    margin-bottom: 28px;
+    letter-spacing: 0.005em;
+  }
+  #reveal .stats {
+    margin: 0 0 28px 0;
+    padding: 14px 0;
+    border-top: 1px solid #1f1f1f;
+    border-bottom: 1px solid #1f1f1f;
+  }
+  #reveal .stats div {
+    display: flex;
+    justify-content: space-between;
+    color: #999;
+    font-size: 14px;
+    padding: 3px 0;
+  }
+  #reveal .stats .num {
+    color: #fff;
+    font-variant-numeric: tabular-nums;
+  }
+  #reveal .line {
+    margin: 0 0 14px 0;
+    color: #bbb;
+  }
+  #reveal .mono {
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    color: #fff;
+    font-size: 13px;
+  }
+  #reveal .small {
+    display: block;
+    font-size: 13px;
+    color: #777;
+    margin-top: 22px;
+    line-height: 1.55;
+  }
+  #reveal .actions {
+    margin-top: 28px;
+    display: flex;
+    gap: 12px;
+  }
+  #reveal .btn {
+    background: transparent;
+    color: #ddd;
+    border: 1px solid #2a2a2a;
+    padding: 8px 18px;
+    font: inherit;
+    font-size: 13px;
+    cursor: pointer;
+    letter-spacing: 0.02em;
+  }
+  #reveal .btn:hover { border-color: #555; color: #fff; }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<pre id="debug"></pre>
+
+<div id="reveal" aria-hidden="true">
+  <div class="inner">
+    <div class="big">It was learning you.</div>
+
+    <div class="stats">
+      <div><span>time on the page</span><span class="num" id="rv-total">—</span></div>
+      <div><span>active attention</span><span class="num" id="rv-active">—</span></div>
+      <div><span>catches</span><span class="num" id="rv-catches">—</span></div>
+    </div>
+
+    <div class="line">The dot had sixteen personalities. The one that held you longest was <span class="mono" id="rv-yours">—</span> — <span id="rv-yours-desc">—</span>.</div>
+    <div class="line">The personality leading across all visitors right now: <span class="mono" id="rv-best">—</span> — <span id="rv-best-desc">—</span>.</div>
+
+    <span class="small">A study in attention as data. The dot is a multi-armed bandit. You were the reward signal.</span>
+
+    <div class="actions">
+      <button class="btn" id="rv-stay">stay</button>
+    </div>
+  </div>
+</div>
+
+<script>
+(function () {
+  'use strict';
+
+  // ---------- Parameter space ----------
+  // v0: 2 levels per dimension → 16 arms.
+  const LEVELS = {
+    speed:    [120, 360],   // px/sec — how fast the dot can move
+    distance: [80,  200],   // px — target distance it tries to keep from cursor
+    escape:   [0.3, 1.4],   // bursts/sec when "nearly caught"
+    delay:    [30,  180],   // ms — lag in reading the cursor
+  };
+
+  const ARMS = [];
+  for (let s = 0; s < 2; s++)
+    for (let d = 0; d < 2; d++)
+      for (let e = 0; e < 2; e++)
+        for (let l = 0; l < 2; l++)
+          ARMS.push({ s, d, e, l, alpha: 1, beta: 1, n: 0 });
+
+  const STORAGE_KEY = 'dotv0_arms_v1';
+
+  function loadArms() {
+    try {
+      const raw = localStorage.getItem(STORAGE_KEY);
+      if (!raw) return;
+      const saved = JSON.parse(raw);
+      if (!Array.isArray(saved) || saved.length !== ARMS.length) return;
+      saved.forEach((a, i) => {
+        if (typeof a.alpha === 'number' && typeof a.beta === 'number') {
+          ARMS[i].alpha = a.alpha;
+          ARMS[i].beta  = a.beta;
+          ARMS[i].n     = a.n || 0;
+        }
+      });
+    } catch (_) {}
+  }
+  function saveArms() {
+    try {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(
+        ARMS.map(a => ({ alpha: a.alpha, beta: a.beta, n: a.n }))
+      ));
+    } catch (_) {}
+  }
+  loadArms();
+
+  // ---------- Sampling primitives ----------
+  function randn() {
+    const u = 1 - Math.random();
+    const v = Math.random();
+    return Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * v);
+  }
+  function gammaSample(k) {
+    if (k < 1) return gammaSample(k + 1) * Math.pow(Math.random(), 1 / k);
+    const d = k - 1 / 3;
+    const c = 1 / Math.sqrt(9 * d);
+    while (true) {
+      let x, v;
+      do { x = randn(); v = 1 + c * x; } while (v <= 0);
+      v = v * v * v;
+      const u = Math.random();
+      if (u < 1 - 0.0331 * Math.pow(x, 4)) return d * v;
+      if (Math.log(u) < 0.5 * x * x + d * (1 - v + Math.log(v))) return d * v;
+    }
+  }
+  function betaSample(a, b) {
+    const x = gammaSample(a);
+    const y = gammaSample(b);
+    return x / (x + y);
+  }
+
+  function pickArm() {
+    let bestI = 0, bestV = -Infinity;
+    for (let i = 0; i < ARMS.length; i++) {
+      const s = betaSample(ARMS[i].alpha, ARMS[i].beta);
+      if (s > bestV) { bestV = s; bestI = i; }
+    }
+    return bestI;
+  }
+  function armParams(idx) {
+    const a = ARMS[idx];
+    return {
+      speed:    LEVELS.speed[a.s],
+      distance: LEVELS.distance[a.d],
+      escape:   LEVELS.escape[a.e],
+      delay:    LEVELS.delay[a.l],
+      label:    `${a.s}${a.d}${a.e}${a.l}`,
+    };
+  }
+  function armLabel(idx) {
+    const a = ARMS[idx];
+    return `${a.s}${a.d}${a.e}${a.l}`;
+  }
+  function describeArm(idx) {
+    const a = ARMS[idx];
+    return [
+      a.s ? 'fast'    : 'slow',
+      a.d ? 'distant' : 'close',
+      a.e ? 'nervous' : 'calm',
+      a.l ? 'delayed' : 'immediate',
+    ].join(', ');
+  }
+
+  // ---------- Mouse buffer + activity ----------
+  let mouseX = window.innerWidth / 2;
+  let mouseY = window.innerHeight / 2;
+  const mouseBuf = []; // { t, x, y }
+  let lastActivity = performance.now();
+  let pageVisible  = !document.hidden;
+
+  function pushMouse(x, y, t) {
+    mouseBuf.push({ x, y, t });
+    while (mouseBuf.length > 0 && t - mouseBuf[0].t > 600) mouseBuf.shift();
+  }
+  function sampleMouseBuffer(targetT) {
+    if (mouseBuf.length === 0) return { x: mouseX, y: mouseY };
+    let best = mouseBuf[0];
+    for (let i = 0; i < mouseBuf.length; i++) {
+      if (mouseBuf[i].t <= targetT) best = mouseBuf[i];
+      else break;
+    }
+    return { x: best.x, y: best.y };
+  }
+
+  window.addEventListener('mousemove', (e) => {
+    mouseX = e.clientX;
+    mouseY = e.clientY;
+    const t = performance.now();
+    pushMouse(mouseX, mouseY, t);
+    lastActivity = t;
+  }, { passive: true });
+
+  window.addEventListener('touchmove', (e) => {
+    if (!e.touches || e.touches.length === 0) return;
+    mouseX = e.touches[0].clientX;
+    mouseY = e.touches[0].clientY;
+    const t = performance.now();
+    pushMouse(mouseX, mouseY, t);
+    lastActivity = t;
+  }, { passive: true });
+
+  window.addEventListener('blur',  () => { pageVisible = false; });
+  window.addEventListener('focus', () => { pageVisible = true;  });
+  document.addEventListener('visibilitychange', () => { pageVisible = !document.hidden; });
+
+  function isActive() {
+    if (!pageVisible) return false;
+    return performance.now() - lastActivity < 1500;
+  }
+
+  // ---------- Canvas ----------
+  const canvas = document.getElementById('c');
+  const ctx    = canvas.getContext('2d');
+  let W = window.innerWidth, H = window.innerHeight;
+  let DPR = window.devicePixelRatio || 1;
+  function resize() {
+    DPR = window.devicePixelRatio || 1;
+    W = window.innerWidth;
+    H = window.innerHeight;
+    canvas.width  = Math.floor(W * DPR);
+    canvas.height = Math.floor(H * DPR);
+    canvas.style.width  = W + 'px';
+    canvas.style.height = H + 'px';
+    ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+  }
+  resize();
+  window.addEventListener('resize', resize);
+
+  // ---------- Dot state ----------
+  const dot = { x: W * 0.5, y: H * 0.5 };
+  let burstUntil = 0, burstVx = 0, burstVy = 0;
+
+  // ---------- Catch / hold / slip state machine ----------
+  // NORMAL    → cursor lands on dot → CAUGHT (held while cursor stays within
+  //                                   HOLD_R, capped at MAX_HOLD_MS, with
+  //                                   growing jitter and scheduled lurches)
+  //                                 → SLIPPING (~280ms outward burst, decaying)
+  //                                 → NORMAL
+  const CATCH_R     = 12;
+  const HOLD_R      = 22;     // cursor must stay within this to keep the hold
+  const MAX_HOLD_MS = 1800;   // longer ceiling — gives struggle room to play out
+  const SLIP_MS     = 320;
+  const SLIP_SPEED  = 760;
+  const LURCH_MS    = 200;
+  // u thresholds at which the dot makes scripted "near-escape" lurches.
+  const LURCH_THRESHOLDS = [0.45, 0.72, 0.92];
+  let dotState    = 'NORMAL';
+  let stateUntil  = 0;
+  let catchStartT = 0;
+  let slipVx = 0, slipVy = 0;
+  let catchCount = 0;
+
+  // Struggle state — set on each catch.
+  let holdAnchorX  = 0;
+  let holdAnchorY  = 0;
+  let lurchFired   = [false, false, false];
+  let lurchUntil   = 0;
+  let lurchVx      = 0;
+  let lurchVy      = 0;
+  // Smooth-noise phase offsets per catch so jitter doesn't repeat identically.
+  let jitterPhaseA = 0;
+  let jitterPhaseB = 0;
+
+  function startCatch(now) {
+    dotState     = 'CAUGHT';
+    catchStartT  = now;
+    catchCount++;
+    holdAnchorX  = dot.x;
+    holdAnchorY  = dot.y;
+    lurchFired   = [false, false, false];
+    lurchUntil   = 0;
+    jitterPhaseA = Math.random() * Math.PI * 2;
+    jitterPhaseB = Math.random() * Math.PI * 2;
+  }
+
+  // ---------- Epoch / bandit loop ----------
+  const EPOCH_MS = 8000;
+  let currentArm    = pickArm();
+  let curParams     = armParams(currentArm);
+  let epochStart    = performance.now();
+  let epochActiveMs = 0;
+
+  // Per-session reward accounting (separate from population memory).
+  // Used by the exit reveal to identify "the personality that held you longest."
+  let sessionArmStats = ARMS.map(() => ({ total: 0, n: 0 }));
+
+  // Smooth parameter transitions at epoch boundaries
+  let blendFromParams = curParams;
+  let blendStart      = -Infinity;
+  const BLEND_MS      = 600;
+  function blendedParams() {
+    const t = performance.now();
+    const u = Math.min(1, (t - blendStart) / BLEND_MS);
+    if (u >= 1) return curParams;
+    const lerp = (a, b) => a + (b - a) * u;
+    return {
+      speed:    lerp(blendFromParams.speed,    curParams.speed),
+      distance: lerp(blendFromParams.distance, curParams.distance),
+      escape:   lerp(blendFromParams.escape,   curParams.escape),
+      delay:    lerp(blendFromParams.delay,    curParams.delay),
+      label:    curParams.label,
+    };
+  }
+
+  // Session totals
+  let sessionStart     = performance.now();
+  let sessionActiveMs  = 0;
+  let epochsCompleted  = 0;
+
+  function endEpoch() {
+    const reward = Math.max(0, Math.min(1, epochActiveMs / EPOCH_MS));
+    ARMS[currentArm].alpha += reward;
+    ARMS[currentArm].beta  += (1 - reward);
+    ARMS[currentArm].n     += 1;
+    saveArms();
+
+    sessionArmStats[currentArm].total += reward;
+    sessionArmStats[currentArm].n     += 1;
+
+    sessionActiveMs += epochActiveMs;
+    epochsCompleted++;
+
+    blendFromParams = curParams;
+    currentArm      = pickArm();
+    curParams       = armParams(currentArm);
+    blendStart      = performance.now();
+    epochStart      = performance.now();
+    epochActiveMs   = 0;
+  }
+
+  // ---------- Animation loop ----------
+  let lastFrameT = performance.now();
+
+  function frame() {
+    const now = performance.now();
+    const dt  = Math.min(0.05, (now - lastFrameT) / 1000);
+    lastFrameT = now;
+
+    // Active dwell accrual (frame-by-frame)
+    if (isActive()) epochActiveMs += dt * 1000;
+
+    // Epoch boundary
+    if (now - epochStart >= EPOCH_MS) endEpoch();
+
+    // Dot dynamics
+    const p = blendedParams();
+    const m = sampleMouseBuffer(now - p.delay);
+
+    // Real (undelayed) distance — used for catch detection so a fast flick
+    // can win against high-delay arms.
+    const realDx = dot.x - mouseX;
+    const realDy = dot.y - mouseY;
+    const realR  = Math.hypot(realDx, realDy);
+
+    if (dotState === 'NORMAL') {
+      if (realR < CATCH_R) {
+        startCatch(now);
+      } else {
+        // Normal motion uses the delayed cursor sample.
+        const dx = dot.x - m.x;
+        const dy = dot.y - m.y;
+        const r  = Math.hypot(dx, dy);
+        const safeR = Math.max(0.001, r);
+        const ux = dx / safeR;
+        const uy = dy / safeR;
+
+        // delta > 0: too far → move toward cursor; delta < 0: too close → move away
+        const delta  = r - p.distance;
+        const factor = Math.tanh(Math.abs(delta) / 40);
+        let vx = -Math.sign(delta) * ux * p.speed * factor;
+        let vy = -Math.sign(delta) * uy * p.speed * factor;
+
+        // Pre-emptive escape burst when nearly caught
+        const nearCaught = r < p.distance * 0.45;
+        if (nearCaught && Math.random() < p.escape * dt) {
+          const ang = Math.atan2(uy, ux) + (Math.random() - 0.5) * 1.0;
+          burstVx    = Math.cos(ang) * p.speed * 3.2;
+          burstVy    = Math.sin(ang) * p.speed * 3.2;
+          burstUntil = now + 220;
+        }
+        if (now < burstUntil) { vx = burstVx; vy = burstVy; }
+
+        dot.x += vx * dt;
+        dot.y += vy * dt;
+      }
+    } else if (dotState === 'CAUGHT') {
+      // ---------- The struggle ----------
+      // The dot squirms around its anchor. Jitter amplitude grows cubically
+      // with hold progress, and at three thresholds it makes scripted
+      // "lurches" — sudden directional pushes away from the cursor that the
+      // user has to chase to keep the grip. The grip ends when the cursor
+      // falls outside HOLD_R of the (jittery) dot, or when MAX_HOLD_MS
+      // elapses — whichever comes first.
+      const heldFor = now - catchStartT;
+      const u = Math.min(1, heldFor / MAX_HOLD_MS);
+
+      // Trigger any lurches whose threshold we've now crossed.
+      for (let i = 0; i < LURCH_THRESHOLDS.length; i++) {
+        if (!lurchFired[i] && u >= LURCH_THRESHOLDS[i]) {
+          lurchFired[i] = true;
+          // Direction: away from cursor, with some jitter.
+          const ang = Math.atan2(dot.y - mouseY, dot.x - mouseX) +
+                      (Math.random() - 0.5) * 0.9;
+          // Each successive lurch is more violent.
+          const lurchSpeed = 220 + i * 180; // 220, 400, 580
+          lurchVx    = Math.cos(ang) * lurchSpeed;
+          lurchVy    = Math.sin(ang) * lurchSpeed;
+          lurchUntil = now + LURCH_MS;
+        }
+      }
+
+      // Smooth jitter — combined sines, low-frequency for organic feel.
+      // Amplitude grows cubically with u so the early hold feels stable.
+      const baseJitter = 1 + u * u * u * 14;
+      const jx = Math.sin(now * 0.018 + jitterPhaseA) * baseJitter
+              + Math.sin(now * 0.041 + jitterPhaseA + 1.3) * baseJitter * 0.45;
+      const jy = Math.cos(now * 0.022 + jitterPhaseB) * baseJitter
+              + Math.cos(now * 0.053 + jitterPhaseB + 2.1) * baseJitter * 0.45;
+
+      // Lurch displacement — sine envelope (0 → 1 → 0) over LURCH_MS.
+      let lurchOffX = 0, lurchOffY = 0;
+      if (now < lurchUntil) {
+        const phase = 1 - (lurchUntil - now) / LURCH_MS;       // 0 → 1
+        const env   = Math.sin(phase * Math.PI);               // 0 → 1 → 0
+        // Peak displacement = velocity * (LURCH_MS/1000) * 0.5
+        const k = (LURCH_MS / 1000) * 0.5 * env;
+        lurchOffX = lurchVx * k;
+        lurchOffY = lurchVy * k;
+      }
+
+      dot.x = holdAnchorX + jx + lurchOffX;
+      dot.y = holdAnchorY + jy + lurchOffY;
+
+      // Now check against the dot's *current* (jittered) position.
+      const ddx = dot.x - mouseX;
+      const ddy = dot.y - mouseY;
+      const dr  = Math.hypot(ddx, ddy);
+
+      if (dr > HOLD_R || heldFor >= MAX_HOLD_MS) {
+        dotState   = 'SLIPPING';
+        stateUntil = now + SLIP_MS;
+        const ang     = Math.atan2(dot.y - mouseY, dot.x - mouseX);
+        const jitter  = (Math.random() - 0.5) * 0.7;
+        const slipAng = (dr > 0.001 || mouseBuf.length > 0)
+          ? ang + jitter
+          : Math.random() * Math.PI * 2;
+        slipVx = Math.cos(slipAng) * SLIP_SPEED;
+        slipVy = Math.sin(slipAng) * SLIP_SPEED;
+        burstUntil = 0;
+      }
+    } else if (dotState === 'SLIPPING') {
+      if (now >= stateUntil) {
+        dotState = 'NORMAL';
+      } else {
+        const u = Math.max(0, (stateUntil - now) / SLIP_MS);
+        dot.x += slipVx * dt * u;
+        dot.y += slipVy * dt * u;
+      }
+    }
+
+    // Bounds
+    const margin = 24;
+    if (dot.x < margin)     dot.x = margin;
+    if (dot.y < margin)     dot.y = margin;
+    if (dot.x > W - margin) dot.x = W - margin;
+    if (dot.y > H - margin) dot.y = H - margin;
+
+    // ---------- Render ----------
+    ctx.clearRect(0, 0, W, H);
+
+    // While held, core + glow grow toward break-free. A faint pulse builds
+    // alongside the jitter so the visual escalation matches the physical one.
+    let coreR = 5;
+    let glowR = 36;
+    if (dotState === 'CAUGHT') {
+      const heldFor = now - catchStartT;
+      const u = Math.min(1, heldFor / MAX_HOLD_MS);
+      // Pulse frequency rises with u — calm at first, frantic at the end.
+      const pulseHz   = 1.5 + u * 6;
+      const pulseAmp  = u * u * 4;
+      const pulse     = Math.sin(now * 0.001 * pulseHz * Math.PI * 2) * pulseAmp;
+      coreR = 7  + u * 13 + pulse * 0.6;
+      glowR = 40 + u * 70 + pulse * 3;
+    }
+
+    const grad = ctx.createRadialGradient(dot.x, dot.y, 0, dot.x, dot.y, glowR);
+    grad.addColorStop(0,    'rgba(255,255,255,0.95)');
+    grad.addColorStop(0.35, 'rgba(255,255,255,0.18)');
+    grad.addColorStop(1,    'rgba(255,255,255,0)');
+    ctx.fillStyle = grad;
+    ctx.beginPath(); ctx.arc(dot.x, dot.y, glowR, 0, Math.PI * 2); ctx.fill();
+
+    ctx.fillStyle = '#fff';
+    ctx.beginPath(); ctx.arc(dot.x, dot.y, coreR, 0, Math.PI * 2); ctx.fill();
+
+    // Cursor indicator — small white ring at the cursor position so it's
+    // visible against the black background regardless of OS cursor settings.
+    ctx.strokeStyle = 'rgba(255,255,255,0.75)';
+    ctx.lineWidth   = 1.25;
+    ctx.beginPath(); ctx.arc(mouseX, mouseY, 8, 0, Math.PI * 2); ctx.stroke();
+    ctx.fillStyle = 'rgba(255,255,255,0.85)';
+    ctx.beginPath(); ctx.arc(mouseX, mouseY, 1.2, 0, Math.PI * 2); ctx.fill();
+
+    if (debugOn) renderDebug();
+
+    requestAnimationFrame(frame);
+  }
+
+  // ---------- Debug overlay ----------
+  let debugOn = false;
+  const debugEl = document.getElementById('debug');
+
+  window.addEventListener('keydown', (e) => {
+    if (e.key === 'd' || e.key === 'D') {
+      debugOn = !debugOn;
+      debugEl.classList.toggle('show', debugOn);
+    } else if (e.key === 'r' || e.key === 'R') {
+      try { localStorage.removeItem(STORAGE_KEY); } catch (_) {}
+      for (const a of ARMS) { a.alpha = 1; a.beta = 1; a.n = 0; }
+      sessionStart    = performance.now();
+      sessionActiveMs = 0;
+      epochsCompleted = 0;
+      catchCount      = 0;
+      epochStart      = performance.now();
+      epochActiveMs   = 0;
+      currentArm      = pickArm();
+      curParams       = armParams(currentArm);
+      blendFromParams = curParams;
+      blendStart      = -Infinity;
+      dotState        = 'NORMAL';
+      stateUntil      = 0;
+      catchStartT     = 0;
+      burstUntil      = 0;
+      lurchFired      = [false, false, false];
+      lurchUntil      = 0;
+      sessionArmStats = ARMS.map(() => ({ total: 0, n: 0 }));
+      revealShown     = false;
+      hideReveal();
+    }
+  });
+
+  function pad(s, n) {
+    s = String(s);
+    return s.length >= n ? s : s + ' '.repeat(n - s.length);
+  }
+
+  function renderDebug() {
+    const ranked = ARMS.map((a, i) => ({
+      i,
+      label: `${a.s}${a.d}${a.e}${a.l}`,
+      mean:  a.alpha / (a.alpha + a.beta),
+      n:     a.n,
+    })).sort((a, b) => b.mean - a.mean);
+
+    const top = ranked.slice(0, 5).map(x =>
+      `  [${x.label}]  mean ${x.mean.toFixed(3)}   n=${pad(x.n, 4)}${x.i === currentArm ? '←' : ''}`
+    ).join('\n');
+
+    const totalSec   = ((performance.now() - sessionStart) / 1000).toFixed(1);
+    const activeSec  = (sessionActiveMs / 1000).toFixed(1);
+    const epochSec   = ((performance.now() - epochStart) / 1000).toFixed(1);
+    const epActSec   = (epochActiveMs / 1000).toFixed(1);
+    const a          = ARMS[currentArm];
+    const p          = blendedParams();
+
+    debugEl.textContent =
+`v0   ·   D toggle   ·   R reset memory
+
+current arm  [${a.s}${a.d}${a.e}${a.l}]   epoch ${epochSec}s/${EPOCH_MS / 1000}s   active ${epActSec}s
+  speed     ${pad(p.speed.toFixed(0)    + ' px/s', 14)} (${LEVELS.speed.indexOf(curParams.speed)})
+  distance  ${pad(p.distance.toFixed(0) + ' px',   14)} (${LEVELS.distance.indexOf(curParams.distance)})
+  escape    ${pad(p.escape.toFixed(2)   + ' /s',   14)} (${LEVELS.escape.indexOf(curParams.escape)})
+  delay     ${pad(p.delay.toFixed(0)    + ' ms',   14)} (${LEVELS.delay.indexOf(curParams.delay)})
+
+session   total ${totalSec}s   active ${activeSec}s   epochs ${epochsCompleted}   catches ${catchCount}
+
+top arms by posterior mean
+${top}`;
+  }
+
+  // ---------- Persistence on blur / unload ----------
+  function flushOnBlur() {
+    // Partial-epoch credit, weighted by elapsed fraction of current epoch
+    const elapsed = performance.now() - epochStart;
+    const frac    = Math.min(1, elapsed / EPOCH_MS);
+    if (frac > 0.1) {
+      const reward = Math.max(0, Math.min(1, epochActiveMs / Math.max(1, elapsed)));
+      ARMS[currentArm].alpha += reward * frac;
+      ARMS[currentArm].beta  += (1 - reward) * frac;
+      // Partial credit for session stats too — weighted by frac.
+      sessionArmStats[currentArm].total += reward * frac;
+      sessionArmStats[currentArm].n     += frac;
+    }
+    saveArms();
+  }
+  document.addEventListener('visibilitychange', () => {
+    if (document.hidden) flushOnBlur();
+  });
+  window.addEventListener('pagehide',     flushOnBlur);
+  window.addEventListener('beforeunload', flushOnBlur);
+
+  // ---------- Exit-intent reveal ----------
+  // Triggers when the cursor crosses the top viewport edge (classic
+  // exit-intent), gated on a minimum dwell so very short visits exit silently.
+  // Shows once per session.
+  const revealEl = document.getElementById('reveal');
+  let revealShown = false;
+  const REVEAL_MIN_DWELL_MS = 30000; // 30s
+
+  function fmtTime(ms) {
+    const s = Math.max(0, Math.round(ms / 1000));
+    if (s < 60) return s + 's';
+    const m = Math.floor(s / 60);
+    const r = s % 60;
+    return m + 'm ' + (r < 10 ? '0' : '') + r + 's';
+  }
+
+  function bestSessionArm() {
+    let bestI = -1, bestMean = -1;
+    for (let i = 0; i < ARMS.length; i++) {
+      const st = sessionArmStats[i];
+      if (st.n <= 0) continue;
+      const mean = st.total / st.n;
+      if (mean > bestMean) { bestMean = mean; bestI = i; }
+    }
+    return bestI;
+  }
+
+  function bestPopulationArm() {
+    // Highest posterior mean, but require some evidence to avoid prior-driven
+    // ties (alpha=beta=1 → mean 0.5 for everything unseen).
+    let bestI = 0, bestMean = -1, anyN = false;
+    for (let i = 0; i < ARMS.length; i++) {
+      if (ARMS[i].n > 0) anyN = true;
+      const mean = ARMS[i].alpha / (ARMS[i].alpha + ARMS[i].beta);
+      if (mean > bestMean) { bestMean = mean; bestI = i; }
+    }
+    if (!anyN) return -1;
+    return bestI;
+  }
+
+  function showReveal() {
+    if (revealShown) return;
+    revealShown = true;
+
+    // Flush partial epoch credit first so stats reflect everything so far.
+    flushOnBlur();
+
+    const totalMs  = performance.now() - sessionStart;
+    const activeMs = sessionActiveMs +
+      (epochActiveMs > 0 ? epochActiveMs : 0); // include current epoch progress
+
+    document.getElementById('rv-total').textContent   = fmtTime(totalMs);
+    document.getElementById('rv-active').textContent  = fmtTime(activeMs);
+    document.getElementById('rv-catches').textContent = String(catchCount);
+
+    const yoursI = bestSessionArm();
+    const bestI  = bestPopulationArm();
+
+    if (yoursI >= 0) {
+      document.getElementById('rv-yours').textContent      = '[' + armLabel(yoursI) + ']';
+      document.getElementById('rv-yours-desc').textContent = describeArm(yoursI);
+    } else {
+      document.getElementById('rv-yours').textContent      = '—';
+      document.getElementById('rv-yours-desc').textContent = 'no full epoch yet';
+    }
+
+    if (bestI >= 0) {
+      document.getElementById('rv-best').textContent      = '[' + armLabel(bestI) + ']';
+      document.getElementById('rv-best-desc').textContent = describeArm(bestI);
+    } else {
+      document.getElementById('rv-best').textContent      = '—';
+      document.getElementById('rv-best-desc').textContent = 'still gathering';
+    }
+
+    document.body.classList.add('reveal-on');
+    revealEl.classList.add('show');
+    revealEl.setAttribute('aria-hidden', 'false');
+  }
+
+  function hideReveal() {
+    document.body.classList.remove('reveal-on');
+    revealEl.classList.remove('show');
+    revealEl.setAttribute('aria-hidden', 'true');
+  }
+
+  document.getElementById('rv-stay').addEventListener('click', (e) => {
+    e.stopPropagation();
+    hideReveal();
+  });
+
+  // Mouseleave at top of viewport = classic exit-intent.
+  // `relatedTarget` is null when leaving the window entirely.
+  document.addEventListener('mouseleave', (e) => {
+    if (revealShown) return;
+    if (performance.now() - sessionStart < REVEAL_MIN_DWELL_MS) return;
+    if (e.clientY > 0) return; // only top-edge exits
+    showReveal();
+  });
+
+  // ---------- Go ----------
+  requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>
