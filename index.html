@@ -55,7 +55,7 @@
     font: 15px/1.6 ui-serif, Georgia, "Times New Roman", serif;
     z-index: 50;
     opacity: 0;
-    transition: opacity 700ms ease;
+    transition: opacity 180ms ease;
     -webkit-user-select: text;
     user-select: text;
     overflow-y: auto;
@@ -579,12 +579,25 @@
     // ---------- Reveal triggers (heading-out signals) ----------
     // Centralized gates live inside showReveal(); these are just signals.
     if (!revealShown && !revealActive) {
-      // (1) Cursor moving fast upward toward the top of the viewport.
-      //     Predicts a sweep to the address bar / browser chrome.
-      if (mouseY < 110 && mouseVy() < -1100) showReveal('predict-top');
-      // (2) Sustained inactivity while the page is still focused — they're
-      //     here but mentally elsewhere. 25s threshold.
-      else if (pageVisible && now - lastActivity > 25000) showReveal('idle');
+      // (1) Cursor moving upward toward browser chrome.
+      //     Generous thresholds so the reveal lands BEFORE they exit, not after.
+      if (mouseY < 200 && mouseVy() < -500) showReveal('predict-top');
+
+      // (2) Cursor parked near the top edge — slow drift to the address bar.
+      else if (mouseY < 100) {
+        if (topZoneStartT === 0) topZoneStartT = now;
+        else if (now - topZoneStartT > 900) showReveal('hover-top');
+      } else {
+        topZoneStartT = 0;
+      }
+
+      // (3) Sustained inactivity while the page is still focused — here but
+      //     mentally elsewhere.
+      if (!revealShown && pageVisible && now - lastActivity > 18000) {
+        showReveal('idle');
+      }
+    } else {
+      topZoneStartT = 0;
     }
 
     // Dot dynamics
@@ -821,6 +834,7 @@
       lurchEncountered = 0;
       lurchSurvived   = 0;
       lurchInFlight   = false;
+      topZoneStartT   = 0;
       hideReveal();
     }
   });
@@ -893,7 +907,8 @@ ${top}`;
   const revealEl = document.getElementById('reveal');
   let revealShown = false;
   let lastRevealReason = '';
-  const REVEAL_MIN_DWELL_MS = 30000; // 30s
+  const REVEAL_MIN_DWELL_MS = 12000; // 12s — enough for ~1 epoch + activity signal
+  let topZoneStartT = 0; // tracks how long the cursor has been near the top edge
 
   function fmtTime(ms) {
     const s = Math.max(0, Math.round(ms / 1000));
@@ -1118,11 +1133,13 @@ ${top}`;
     hideReveal();
   });
 
-  // Mouseleave at top of viewport = classic exit-intent (last-resort signal,
-  // since the predict-top trigger should usually fire first).
+  // Mouseleave the document at any browser-chrome edge. The bottom edge is
+  // usually the OS dock/taskbar and not a strong leave signal, so we skip it.
   document.addEventListener('mouseleave', (e) => {
-    if (e.clientY > 0) return; // only top-edge exits
-    showReveal('exit-top');
+    const W = window.innerWidth;
+    if (e.clientY <= 0 || e.clientX <= 0 || e.clientX >= W) {
+      showReveal('exit-edge');
+    }
   });
 
   // ---------- Go ----------
