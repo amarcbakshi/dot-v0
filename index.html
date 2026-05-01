@@ -256,9 +256,12 @@
   // ---------- Mouse buffer + activity ----------
   let mouseX = window.innerWidth / 2;
   let mouseY = window.innerHeight / 2;
+  let mouseDown = false;
   const mouseBuf = []; // { t, x, y }
   let lastActivity = performance.now();
   let pageVisible  = !document.hidden;
+  let revealActive = false; // set true while the reveal overlay is shown
+  let lastHiddenAt = 0;
 
   function pushMouse(x, y, t) {
     mouseBuf.push({ x, y, t });
@@ -272,6 +275,18 @@
       else break;
     }
     return { x: best.x, y: best.y };
+  }
+
+  // Smoothed vertical velocity over the most recent ~60–150ms of mouse
+  // movement, in px/sec. Negative = moving up. Used by exit prediction.
+  function mouseVy() {
+    if (mouseBuf.length < 2) return 0;
+    const last = mouseBuf[mouseBuf.length - 1];
+    for (let i = mouseBuf.length - 2; i >= 0; i--) {
+      const dt = (last.t - mouseBuf[i].t) / 1000;
+      if (dt >= 0.06) return (last.y - mouseBuf[i].y) / dt;
+    }
+    return 0;
   }
 
   window.addEventListener('mousemove', (e) => {
@@ -291,9 +306,40 @@
     lastActivity = t;
   }, { passive: true });
 
-  window.addEventListener('blur',  () => { pageVisible = false; });
+  // Mousedown / mouseup — needed for the "click to grab" catch model.
+  window.addEventListener('mousedown', (e) => {
+    if (e.button !== 0) return;        // left button only
+    if (revealActive) return;          // don't register grabs through the overlay
+    mouseDown   = true;
+    lastActivity = performance.now();
+  }, { passive: true });
+  window.addEventListener('mouseup',     () => { mouseDown = false; }, { passive: true });
+  window.addEventListener('touchstart', (e) => {
+    if (!e.touches || e.touches.length === 0) return;
+    if (revealActive) return;
+    mouseX = e.touches[0].clientX;
+    mouseY = e.touches[0].clientY;
+    const t = performance.now();
+    pushMouse(mouseX, mouseY, t);
+    mouseDown   = true;
+    lastActivity = t;
+  }, { passive: true });
+  window.addEventListener('touchend',    () => { mouseDown = false; }, { passive: true });
+  window.addEventListener('touchcancel', () => { mouseDown = false; }, { passive: true });
+
+  window.addEventListener('blur',  () => { pageVisible = false; mouseDown = false; });
   window.addEventListener('focus', () => { pageVisible = true;  });
-  document.addEventListener('visibilitychange', () => { pageVisible = !document.hidden; });
+  document.addEventListener('visibilitychange', () => {
+    pageVisible = !document.hidden;
+    if (document.hidden) {
+      lastHiddenAt = performance.now();
+      mouseDown    = false;
+    } else if (lastHiddenAt > 0 &&
+               performance.now() - lastHiddenAt >= 8000) {
+      // Returned after a non-trivial absence — they checked out and came back.
+      showReveal('returned');
+    }
+  });
 
   function isActive() {
     if (!pageVisible) return false;
@@ -323,12 +369,15 @@
   let burstUntil = 0, burstVx = 0, burstVy = 0;
 
   // ---------- Catch / hold / slip state machine ----------
-  // NORMAL    → cursor lands on dot → CAUGHT (held while cursor stays within
+  // NORMAL    → mouse pressed AND cursor on dot → CAUGHT (held while button
+  //                                   stays down AND cursor stays within
   //                                   HOLD_R, capped at MAX_HOLD_MS, with
   //                                   growing jitter and scheduled lurches)
-  //                                 → SLIPPING (~280ms outward burst, decaying)
+  //                                 → SLIPPING (~320ms outward burst, decaying)
   //                                 → NORMAL
-  const CATCH_R     = 12;
+  // Just hovering the cursor over the dot does NOT catch it — the dot will
+  // evade. You have to click (or touch) to commit the grab.
+  const CATCH_R     = 16;     // grab radius — slightly generous since dot moves
   const HOLD_R      = 22;     // cursor must stay within this to keep the hold
   const MAX_HOLD_MS = 1800;   // longer ceiling — gives struggle room to play out
   const SLIP_MS     = 320;
@@ -434,6 +483,17 @@
     // Epoch boundary
     if (now - epochStart >= EPOCH_MS) endEpoch();
 
+    // ---------- Reveal triggers (heading-out signals) ----------
+    // Centralized gates live inside showReveal(); these are just signals.
+    if (!revealShown && !revealActive) {
+      // (1) Cursor moving fast upward toward the top of the viewport.
+      //     Predicts a sweep to the address bar / browser chrome.
+      if (mouseY < 110 && mouseVy() < -1100) showReveal('predict-top');
+      // (2) Sustained inactivity while the page is still focused — they're
+      //     here but mentally elsewhere. 25s threshold.
+      else if (pageVisible && now - lastActivity > 25000) showReveal('idle');
+    }
+
     // Dot dynamics
     const p = blendedParams();
     const m = sampleMouseBuffer(now - p.delay);
@@ -445,7 +505,9 @@
     const realR  = Math.hypot(realDx, realDy);
 
     if (dotState === 'NORMAL') {
-      if (realR < CATCH_R) {
+      // Catch only on an active mouse-down inside the grab radius.
+      // Cursor proximity alone makes the dot evade, not get caught.
+      if (mouseDown && realR < CATCH_R) {
         startCatch(now);
       } else {
         // Normal motion uses the delayed cursor sample.
@@ -528,7 +590,9 @@
       const ddy = dot.y - mouseY;
       const dr  = Math.hypot(ddx, ddy);
 
-      if (dr > HOLD_R || heldFor >= MAX_HOLD_MS) {
+      // Hold ends when: button released, cursor strays beyond HOLD_R, or the
+      // max hold duration is up.
+      if (!mouseDown || dr > HOLD_R || heldFor >= MAX_HOLD_MS) {
         dotState   = 'SLIPPING';
         stateUntil = now + SLIP_MS;
         const ang     = Math.atan2(dot.y - mouseY, dot.x - mouseX);
@@ -587,8 +651,16 @@
 
     // Cursor indicator — small white ring at the cursor position so it's
     // visible against the black background regardless of OS cursor settings.
-    ctx.strokeStyle = 'rgba(255,255,255,0.75)';
-    ctx.lineWidth   = 1.25;
+    // While the mouse button is pressed, the ring fills to telegraph that
+    // the user is actively grabbing.
+    if (mouseDown) {
+      ctx.fillStyle = 'rgba(255,255,255,0.30)';
+      ctx.beginPath(); ctx.arc(mouseX, mouseY, 10, 0, Math.PI * 2); ctx.fill();
+      ctx.strokeStyle = 'rgba(255,255,255,0.95)';
+    } else {
+      ctx.strokeStyle = 'rgba(255,255,255,0.75)';
+    }
+    ctx.lineWidth = 1.25;
     ctx.beginPath(); ctx.arc(mouseX, mouseY, 8, 0, Math.PI * 2); ctx.stroke();
     ctx.fillStyle = 'rgba(255,255,255,0.85)';
     ctx.beginPath(); ctx.arc(mouseX, mouseY, 1.2, 0, Math.PI * 2); ctx.fill();
@@ -627,6 +699,9 @@
       lurchUntil      = 0;
       sessionArmStats = ARMS.map(() => ({ total: 0, n: 0 }));
       revealShown     = false;
+      lastHiddenAt    = 0;
+      lastRevealReason = '';
+      mouseDown       = false;
       hideReveal();
     }
   });
@@ -665,6 +740,7 @@ current arm  [${a.s}${a.d}${a.e}${a.l}]   epoch ${epochSec}s/${EPOCH_MS / 1000}s
   delay     ${pad(p.delay.toFixed(0)    + ' ms',   14)} (${LEVELS.delay.indexOf(curParams.delay)})
 
 session   total ${totalSec}s   active ${activeSec}s   epochs ${epochsCompleted}   catches ${catchCount}
+state   ${dotState}   mouseDown ${mouseDown ? 'Y' : 'n'}   reveal ${revealShown ? 'shown ['+lastRevealReason+']' : 'pending'}
 
 top arms by posterior mean
 ${top}`;
@@ -697,6 +773,7 @@ ${top}`;
   // Shows once per session.
   const revealEl = document.getElementById('reveal');
   let revealShown = false;
+  let lastRevealReason = '';
   const REVEAL_MIN_DWELL_MS = 30000; // 30s
 
   function fmtTime(ms) {
@@ -731,9 +808,13 @@ ${top}`;
     return bestI;
   }
 
-  function showReveal() {
-    if (revealShown) return;
-    revealShown = true;
+  function showReveal(reason) {
+    if (revealShown || revealActive) return;
+    if (performance.now() - sessionStart < REVEAL_MIN_DWELL_MS) return;
+    if (dotState === 'CAUGHT') return; // never interrupt an in-progress hold
+    revealShown  = true;
+    revealActive = true;
+    lastRevealReason = reason || 'unknown';
 
     // Flush partial epoch credit first so stats reflect everything so far.
     flushOnBlur();
@@ -771,6 +852,7 @@ ${top}`;
   }
 
   function hideReveal() {
+    revealActive = false;
     document.body.classList.remove('reveal-on');
     revealEl.classList.remove('show');
     revealEl.setAttribute('aria-hidden', 'true');
@@ -781,13 +863,11 @@ ${top}`;
     hideReveal();
   });
 
-  // Mouseleave at top of viewport = classic exit-intent.
-  // `relatedTarget` is null when leaving the window entirely.
+  // Mouseleave at top of viewport = classic exit-intent (last-resort signal,
+  // since the predict-top trigger should usually fire first).
   document.addEventListener('mouseleave', (e) => {
-    if (revealShown) return;
-    if (performance.now() - sessionStart < REVEAL_MIN_DWELL_MS) return;
     if (e.clientY > 0) return; // only top-edge exits
-    showReveal();
+    showReveal('exit-top');
   });
 
   // ---------- Go ----------
